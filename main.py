@@ -16,7 +16,7 @@ import boto3
 
 model_id = "THUDM/CogVideoX-2b"
 torch_dtype = torch.bfloat16
-quantization = int8_weight_only
+# quantization = int8_weight_only
 local_model_dir = "/home/ubuntu/models/cogvideox"  # You can customize this path
 
 class State(TypedDict):
