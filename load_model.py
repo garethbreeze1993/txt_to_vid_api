@@ -73,3 +73,70 @@
         #     aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
         #     region_name=os.environ.get("AWS_REGION", "us-east-1")
         # )
+
+# import torch
+# from fastapi import FastAPI
+#
+# from dotenv import load_dotenv
+#
+# load_dotenv()  # take environment variables
+#
+#
+# import logging
+# import os
+#
+#
+# # Define the logging configuration
+# LOGGING_CONFIG = {
+#     'version': 1,
+#     'disable_existing_loggers': False,
+#
+#     'formatters': {
+#         'default': {
+#             'format': '[%(asctime)s] %(levelname)s in %(name)s: %(message)s',
+#         },
+#     },
+#
+#     'handlers': {
+#         'file': {
+#             'level': 'INFO',
+#             'class': 'logging.FileHandler',
+#             'filename': 'app.log',
+#             'formatter': 'default',
+#         },
+#     },
+#
+#     'root': {
+#         'handlers': ['file'],
+#         'level': 'INFO',
+#     },
+# }
+#
+# # Apply the logging configuration
+# logging.config.dictConfig(LOGGING_CONFIG)
+#
+# # Example usage
+# logger = logging.getLogger(__name__)
+#
+# from pydantic import BaseModel
+#
+# class GenerateRequest(BaseModel):
+#     video_id: int
+#     prompt: str
+#     celery_task_id: str
+#
+#
+# app = FastAPI()
+#
+# @app.get("/test")
+# def test():
+#     logger.info('test')
+#     return "PONG YOU SUNK MY BATTLESHIP"
+#
+# @app.post("/generate")
+# def generate(request: GenerateRequest):
+#     logger.info('generate')
+#     logger.info(request.video_id)
+#     logger.info(request.prompt)
+#     logger.info(request.celery_task_id)
+#     return "Video generated"

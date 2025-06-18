@@ -10,10 +10,16 @@ from contextlib import asynccontextmanager
 
 from diffusers import CogVideoXPipeline
 from diffusers.utils import export_to_video
+from pydantic import BaseModel
 from typing import TypedDict
 import logging
 import os
 import boto3
+
+class GenerateRequest(BaseModel):
+    video_id: int
+    prompt: str
+    celery_task_id: str
 
 model_id = "THUDM/CogVideoX-2b"
 torch_dtype = torch.bfloat16
@@ -84,14 +90,14 @@ def test():
 
 
 @app.post("/generate")
-def generate(video_id: int, prompt: str, celery_task_id: str):
+def generate(request: GenerateRequest):
 
     pipe = app.state.pipeline
 
-    video_id = video_id
+    video_id = request.video_id
 
     result = pipe(
-        prompt=prompt,
+        prompt=request.prompt,
         num_videos_per_prompt=1,
         num_inference_steps=50,
         num_frames=24,
