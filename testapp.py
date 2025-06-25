@@ -1,6 +1,6 @@
-import torch
 from fastapi import FastAPI, Request, BackgroundTasks
 from datetime import datetime
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -9,21 +9,18 @@ load_dotenv()  # take environment variables
 
 from contextlib import asynccontextmanager
 
-from diffusers import CogVideoXPipeline
-from diffusers.utils import export_to_video
 from pydantic import BaseModel
-from typing import TypedDict, Optional
+from typing import TypedDict
 import logging
 import os
-import boto3
 
 from database import JobManager
+
 
 class GenerateRequest(BaseModel):
     video_id: int
     prompt: str
     celery_task_id: str
-
 
 class JobStatusResponse(BaseModel):
     job_id: str
@@ -33,8 +30,6 @@ class JobStatusResponse(BaseModel):
     created_at: str
     completed_at: Optional[str] = None
 
-model_id = "THUDM/CogVideoX-2b"
-torch_dtype = torch.bfloat16
 # quantization = int8_weight_only
 local_model_dir = "/home/ubuntu/models/cogvideox"  # You can customize this path
 
@@ -70,96 +65,21 @@ logging.config.dictConfig(LOGGING_CONFIG)
 # Example usage
 logger = logging.getLogger(__name__)
 
-class State(TypedDict):
-    pipe: CogVideoXPipeline
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
     JobManager.init_db()
-
-    pipe = CogVideoXPipeline.from_pretrained(
-        "THUDM/CogVideoX-2b",
-        torch_dtype=torch.float16
-    )
-
-    pipe.enable_model_cpu_offload()
-    pipe.enable_sequential_cpu_offload()
-    pipe.vae.enable_slicing()
-    pipe.vae.enable_tiling()
-
-    app.state.pipeline = pipe
-    print("Pipeline loaded and ready.")
     yield
-    print("Shutting down... cleaning up.")
-    del pipe
-
-
 app = FastAPI(lifespan=lifespan)
 
 
 def background_generate(job_id: str, prompt: str, video_id: int):
-
     JobManager.update_job(job_id, {
-        "status": "processing",
-        "message": "Generating video..."
+        "status": "completed",
+        "video_url": "google.com",
+        "message": "Video generated successfully",
+        "completed_at": datetime.now().isoformat()
     })
-
-    pipe = app.state.pipeline
-
-    result = pipe(
-        prompt=prompt,
-        num_videos_per_prompt=1,
-        num_inference_steps=50,
-        num_frames=24,
-        guidance_scale=6,
-        generator=torch.Generator(device="cuda").manual_seed(42),
-    ).frames[0]
-
-    JobManager.update_job(job_id, {
-        "status": "processing",
-        "message": "Uploading to S3..."
-    })
-
-    output_path = f"/tmp/output_{video_id}.mp4"
-    export_to_video(result, output_path, fps=8)
-
-    # S3 configuration
-    s3_bucket = os.environ.get("S3_BUCKET_NAME")
-    s3_key = f"videos/{video_id}.mp4"
-
-    # Upload to S3
-    try:
-
-        region = os.environ.get("AWS_REGION", "us-east-1")
-
-        s3_client = boto3.client('s3', region_name=region)
-
-        s3_client.upload_file(output_path, s3_bucket, s3_key)
-
-        s3_url = f"https://{s3_bucket}.s3.{region}.amazonaws.com/{s3_key}"
-
-        # Clean up the temporary file
-        os.remove(output_path)
-
-    except Exception as e:
-        JobManager.update_job(job_id, {
-            "status": "failed",
-            "message": f"An error occurred: {str(e)}",
-            "completed_at": datetime.now().isoformat()
-        })
-        return {"error": f"An error occurred: {str(e)}"}
-    else:
-        # Update job status to completed
-        JobManager.update_job(job_id, {
-            "status": "completed",
-            "video_url": s3_url,
-            "message": "Video generated successfully",
-            "completed_at": datetime.now().isoformat()
-        })
-        #TODO Webhook back to django app to update the job there
-        return {"message": "Video generated", "path": s3_url}
+    return {"message": "Video generated"}
 
 @app.get("/test")
 def test():
@@ -167,11 +87,9 @@ def test():
 
 @app.post("/generate")
 def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
-    # Create job in database
     JobManager.create_job(request.celery_task_id, request.prompt, request.video_id)
 
     background_tasks.add_task(
-
         background_generate,
         request.celery_task_id,
         request.prompt,
@@ -184,13 +102,10 @@ def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
         "message": "Video generation started. Use the job_id to check status."
     }
 
-
 @app.get("/status/{job_id}")
 def get_job_status(job_id: str) -> JobStatusResponse:
     """Get the status of a video generation job"""
-
     job_data = JobManager.get_job(job_id)
-
     if not job_data:
         return JobStatusResponse(
             job_id=job_id,
@@ -198,5 +113,4 @@ def get_job_status(job_id: str) -> JobStatusResponse:
             message="Job not found or expired",
             created_at=datetime.now().isoformat()
         )
-
     return JobStatusResponse(**job_data)
