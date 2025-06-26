@@ -16,6 +16,7 @@ from typing import TypedDict, Optional
 import logging
 import os
 import boto3
+import requests
 
 from database import JobManager
 
@@ -90,13 +91,54 @@ async def lifespan(app: FastAPI):
     pipe.vae.enable_tiling()
 
     app.state.pipeline = pipe
-    print("Pipeline loaded and ready.")
+    logger.debug(f"Pipeline loaded and ready. at --- {datetime.now()}")
     yield
-    print("Shutting down... cleaning up.")
+    logger.debug(f"Shutting down... cleaning up. at --- {datetime.now()}")
     del pipe
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+def notify_django_completion(video_id: int, job_id: str, status: str, video_url: str = None, error_message: str = None):
+    """Notify Django site about job completion"""
+
+    if not os.environ.get("DJANGO_WEBHOOK_URL"):
+        logger.error(f"No env variable for webhook url")
+        return
+
+    payload = {
+        "video_id": video_id,
+        "job_id": job_id,
+        "status": status,
+        "completed_at": datetime.now().isoformat(),
+        "video_url": video_url,
+        "error_message": error_message
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "VideoGen-Service/1.0"
+    }
+
+    # Add API key if configured
+    if os.environ.get("DJANGO_API_KEY"):
+        headers["Authorization"] = f"Bearer {os.environ.get("DJANGO_API_KEY")}"
+
+    else:
+        logger.error(f"No env variable for api key")
+        return
+
+    try:
+        response = requests.post(url=f"{os.environ.get("DJANGO_WEBHOOK_URL")}", json=payload, headers=headers)
+
+        if response.status_code == 200:
+            logger.debug(f"✓ Django notified successfully for job {job_id}")
+        else:
+            logger.error(f"⚠ Django notification failed for job {job_id}: {response.status_code} - {response.text}")
+
+    except Exception as e:
+        logger.error(f"Error notifying Django for job {job_id}: {str(e)}")
 
 
 def background_generate(job_id: str, prompt: str, video_id: int):
@@ -145,11 +187,13 @@ def background_generate(job_id: str, prompt: str, video_id: int):
 
     except Exception as e:
         JobManager.update_job(job_id, {
-            "status": "failed",
+            "status": "error",
             "message": f"An error occurred: {str(e)}",
             "completed_at": datetime.now().isoformat()
         })
-        return {"error": f"An error occurred: {str(e)}"}
+
+        notify_django_completion(video_id, job_id, "failed", error_message=str(e))
+
     else:
         # Update job status to completed
         JobManager.update_job(job_id, {
@@ -158,8 +202,9 @@ def background_generate(job_id: str, prompt: str, video_id: int):
             "message": "Video generated successfully",
             "completed_at": datetime.now().isoformat()
         })
-        #TODO Webhook back to django app to update the job there
-        return {"message": "Video generated", "path": s3_url}
+
+        notify_django_completion(video_id, job_id, "completed", video_url=s3_url)
+
 
 @app.get("/test")
 def test():

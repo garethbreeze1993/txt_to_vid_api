@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, BackgroundTasks
 from datetime import datetime
 from typing import Optional
+import time
 
 from dotenv import load_dotenv
 
@@ -13,6 +14,7 @@ from pydantic import BaseModel
 from typing import TypedDict
 import logging
 import os
+import requests
 
 from database import JobManager
 
@@ -24,7 +26,7 @@ class GenerateRequest(BaseModel):
 
 class JobStatusResponse(BaseModel):
     job_id: str
-    status: str  # "pending", "processing", "completed", "failed"
+    status: str
     message: Optional[str] = None
     video_url: Optional[str] = None
     created_at: str
@@ -71,14 +73,67 @@ async def lifespan(app: FastAPI):
     yield
 app = FastAPI(lifespan=lifespan)
 
+def notify_django_completion(video_id: int, job_id: str, status: str, video_url: str = None, error_message: str = None):
+    """Notify Django site about job completion"""
+
+    if not os.environ.get("DJANGO_WEBHOOK_URL"):
+        logger.error(f"No env variable for webhook url")
+        return
+
+    payload = {
+        "video_id": video_id,
+        "job_id": job_id,
+        "status": status,
+        "completed_at": datetime.now().isoformat(),
+        "video_url": video_url,
+        "error_message": error_message
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "VideoGen-Service/1.0"
+    }
+
+    # Add API key if configured
+    if os.environ.get("DJANGO_API_KEY"):
+        headers["Authorization"] = f"Bearer {os.environ.get("DJANGO_API_KEY")}"
+        # or use: headers["X-API-Key"] = DJANGO_API_KEY
+    else:
+        logger.error(f"No env variable for api key")
+        return
+
+    try:
+        response = requests.post(url=f"{os.environ.get("DJANGO_WEBHOOK_URL")}", json=payload, headers=headers)
+
+        if response.status_code == 200:
+            logger.debug(f"✓ Django notified successfully for job {job_id}")
+        else:
+            logger.error(f"⚠ Django notification failed for job {job_id}: {response.status_code} - {response.text}")
+
+    except Exception as e:
+        logger.error(f"Error notifying Django for job {job_id}: {str(e)}")
+
 
 def background_generate(job_id: str, prompt: str, video_id: int):
+    s3_url = "google.com"
+
+    JobManager.update_job(job_id, {
+        "status": "processing",
+        "message": "Doing ma thing",
+        "completed_at": datetime.now().isoformat()
+    })
+
+    time.sleep(60)
+
     JobManager.update_job(job_id, {
         "status": "completed",
-        "video_url": "google.com",
+        "video_url": s3_url,
         "message": "Video generated successfully",
         "completed_at": datetime.now().isoformat()
     })
+
+    notify_django_completion(video_id, job_id, "completed", video_url=s3_url)
+
     return {"message": "Video generated"}
 
 @app.get("/test")
